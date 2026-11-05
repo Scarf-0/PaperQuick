@@ -52,7 +52,8 @@ function run(argv) {
 def confirm_candidate(path: Path, metadata: Metadata) -> bool:
     if os.environ.get("PAPERQUICK_NONINTERACTIVE") == "1":
         return False
-    details = (
+    message = (
+        f"Use this match for {path.name}?\n\n"
         f"{metadata.title}\n{', '.join(metadata.authors)} ({metadata.year})\n"
         f"{metadata.journal}\n{metadata.doi}"
     )
@@ -61,8 +62,7 @@ function run(argv) {
   var app = Application.currentApplication();
   app.includeStandardAdditions = true;
   try {
-    var message = 'Use this match for ' + argv[0] + '?\n\n' + argv[1];
-    var result = app.displayDialog(message, {
+    var result = app.displayDialog(argv[0], {
       withTitle: 'PaperQuick', buttons: ['Cancel', 'Use Match'],
       defaultButton: 'Use Match', cancelButton: 'Cancel'
     });
@@ -70,7 +70,7 @@ function run(argv) {
   } catch (e) { return 'no'; }
 }
 """
-    result = _run_jxa(script, [path.name, details])
+    result = _run_jxa(script, [message])
     return clean_text(result.stdout) == "yes"
 
 
