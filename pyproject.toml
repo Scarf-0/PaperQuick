@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperquick"
+version = "0.1.0"
+description = "Rename academic PDFs and copy slide-ready citations from Finder on macOS"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "Scarf" }]
+dependencies = ["pypdf>=4.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+paperquick = "paperquick.cli:main"
+
+[tool.setuptools.package-data]
+paperquick = ["data/*.json"]
+
+[tool.setuptools.packages.find]
+include = ["paperquick*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
