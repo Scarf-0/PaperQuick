@@ -18,6 +18,11 @@ macOS versions, Automator workflows may instead be grouped under **Quick Actions
 - **PaperQuick - Rename PDF** creates names such as `1998 - Winter et al. - Stiffness Control of Balance in Quiet Standing.pdf`.
 - **PaperQuick - Copy PPT Citation** copies citations such as `Winter et al., J Neurophysiol, 1998, 80:1211–1221.`
 
+Keyboard shortcuts in Finder:
+
+- **Control-Command-R** renames the selected PDFs.
+- **Control-Command-C** copies citations for the selected PDFs.
+
 When a match is uncertain, PaperQuick asks for a DOI or full title. It never deletes or overwrites a PDF.
 
 ## Privacy

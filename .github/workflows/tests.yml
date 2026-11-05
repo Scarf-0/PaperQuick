@@ -22,5 +22,5 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: find workflows -name document.wflow -exec plutil -lint {} +
+      - run: find workflows \( -name document.wflow -o -name Info.plist \) -exec plutil -lint {} +
 
