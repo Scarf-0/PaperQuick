@@ -12,7 +12,8 @@ curl -fsSL https://raw.githubusercontent.com/Scarf-0/PaperQuick/main/install.sh 
 
 ## Use
 
-Select one or more PDFs in Finder, right-click, then choose **Quick Actions**:
+Select one or more PDFs in Finder, right-click, then choose **Services**. On some
+macOS versions, Automator workflows may instead be grouped under **Quick Actions**.
 
 - **PaperQuick - Rename PDF** creates names such as `1998 - Winter et al. - Stiffness Control of Balance in Quiet Standing.pdf`.
 - **PaperQuick - Copy PPT Citation** copies citations such as `Winter et al., J Neurophysiol, 1998, 80:1211–1221.`

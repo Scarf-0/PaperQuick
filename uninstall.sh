@@ -13,6 +13,9 @@ esac
 
 rm -rf "$APP_DIR" "$RENAME_WORKFLOW" "$CITE_WORKFLOW"
 rm -f "$LOG_FILE"
+/System/Library/CoreServices/pbs -flush >/dev/null 2>&1 || true
+/System/Library/CoreServices/pbs -update >/dev/null 2>&1 || true
 /usr/bin/killall pbs >/dev/null 2>&1 || true
+/usr/bin/killall Finder >/dev/null 2>&1 || true
 echo "PaperQuick uninstalled. Your PDFs were not changed."
 

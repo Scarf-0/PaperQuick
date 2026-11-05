@@ -50,7 +50,7 @@ exec "$HOME/Library/Application Support/PaperQuick/venv/bin/paperquick" rename "
 		<key>serviceApplicationPath</key><string>/System/Library/CoreServices/Finder.app</string>
 		<key>serviceInputTypeIdentifier</key><string>com.adobe.pdf</string>
 		<key>serviceOutputTypeIdentifier</key><string>com.apple.Automator.nothing</string>
-		<key>serviceProcessesInput</key><true/>
+		<key>serviceProcessesInput</key><false/>
 		<key>workflowTypeIdentifier</key><string>com.apple.Automator.servicesMenu</string>
 	</dict>
 </dict>

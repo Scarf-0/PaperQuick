@@ -53,11 +53,17 @@ for workflow in "PaperQuick - Rename PDF.workflow" "PaperQuick - Copy PPT Citati
     rm -rf "$destination"
   fi
   cp -R "$SOURCE_DIR/workflows/$workflow" "$destination"
+  mkdir -p "$destination/Contents/Resources"
+  cp "$destination/Contents/document.wflow" \
+    "$destination/Contents/Resources/document.wflow"
 done
 
 cp "$SOURCE_DIR/uninstall.sh" "$APP_DIR/uninstall.sh"
 chmod +x "$APP_DIR/uninstall.sh"
+/System/Library/CoreServices/pbs -flush >/dev/null 2>&1 || true
+/System/Library/CoreServices/pbs -update >/dev/null 2>&1 || true
 /usr/bin/killall pbs >/dev/null 2>&1 || true
+/usr/bin/killall Finder >/dev/null 2>&1 || true
 
-echo "PaperQuick installed. Select PDF files in Finder and open Quick Actions."
+echo "PaperQuick installed. Select PDFs in Finder, right-click, and open Services."
 
