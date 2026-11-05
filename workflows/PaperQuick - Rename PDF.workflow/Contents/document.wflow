@@ -48,9 +48,11 @@ exec "$HOME/Library/Application Support/PaperQuick/venv/bin/paperquick" rename "
 	<dict>
 		<key>serviceApplicationBundleID</key><string>com.apple.finder</string>
 		<key>serviceApplicationPath</key><string>/System/Library/CoreServices/Finder.app</string>
-		<key>serviceInputTypeIdentifier</key><string>com.adobe.pdf</string>
+		<key>serviceInputTypeIdentifier</key><string>com.apple.Automator.fileSystemObject</string>
 		<key>serviceOutputTypeIdentifier</key><string>com.apple.Automator.nothing</string>
-		<key>serviceProcessesInput</key><false/>
+		<key>serviceProcessesInput</key><integer>0</integer>
+		<key>systemImageName</key><string>NSTouchBarDocuments</string>
+		<key>useAutomaticInputType</key><integer>1</integer>
 		<key>workflowTypeIdentifier</key><string>com.apple.Automator.servicesMenu</string>
 	</dict>
 </dict>
