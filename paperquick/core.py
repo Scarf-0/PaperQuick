@@ -24,7 +24,8 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 GENERIC_TITLE_RE = re.compile(
-    r"^(?:untitled|document|pdf|tbme\d*|pii\s*:|doi\s*:|[a-z]{0,3}\.?\d[\w.%-]*)",
+    r"^(?:untitled|document|pdf|unknown year|unknown author|tbme\d*|pii\s*:|"
+    r"doi\s*:|[a-z]{0,3}\.?\d[\w.%-]*)",
     re.IGNORECASE,
 )
 BOILERPLATE_RE = re.compile(
@@ -93,6 +94,24 @@ def extract_dois(value: str) -> list[str]:
         doi = match.rstrip(".,;:]}").strip()
         if doi.lower() not in {item.lower() for item in found}:
             found.append(doi)
+    return found
+
+
+def _article_dois(metadata: dict, page_text: str) -> list[str]:
+    values = [
+        value
+        for key, value in metadata.items()
+        if "ARTICLEDOI" in str(key).upper()
+    ]
+    values.append(page_text)
+    values.extend(metadata.values())
+    found: list[str] = []
+    for value in values:
+        for doi in extract_dois(clean_text(value)):
+            if "(issn)" in doi.lower():
+                continue
+            if doi.lower() not in {item.lower() for item in found}:
+                found.append(doi)
     return found
 
 
@@ -176,7 +195,7 @@ def read_pdf_evidence(path: Path) -> Evidence:
         years=years,
         volumes=volumes,
         pages=pages,
-        dois=extract_dois(combined),
+        dois=_article_dois(raw_metadata, page_text),
     )
 
 
@@ -242,6 +261,17 @@ def metadata_from_openalex(item: dict) -> Metadata:
     )
 
 
+def metadata_is_complete(metadata: Optional[Metadata]) -> bool:
+    title = clean_text(metadata.title) if metadata else ""
+    return bool(
+        metadata
+        and len(title) >= 8
+        and not GENERIC_TITLE_RE.match(title)
+        and metadata.authors
+        and re.fullmatch(r"(?:19|20)\d{2}", metadata.year or "")
+    )
+
+
 def title_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, normalize_title(left), normalize_title(right)).ratio()
 
@@ -285,6 +315,8 @@ class Resolver:
             item = self.fetch_json(url).get("message")
             if item:
                 result = metadata_from_crossref(item)
+                if not metadata_is_complete(result):
+                    return None
                 result.confidence = 1.0
                 return result
         except Exception:
@@ -488,7 +520,7 @@ class PaperQuick:
     def metadata_for(self, path: Path) -> Optional[Metadata]:
         digest = file_sha256(path)
         cached = self.cache.get(digest)
-        if cached:
+        if metadata_is_complete(cached):
             return cached
 
         evidence = read_pdf_evidence(path)
@@ -500,6 +532,7 @@ class PaperQuick:
         )
         accepted = bool(
             candidate
+            and metadata_is_complete(candidate)
             and (
                 doi_match
                 or (
@@ -521,7 +554,7 @@ class PaperQuick:
         if not query:
             return None
         candidate = self.resolver.resolve(evidence, query)
-        if not candidate:
+        if not metadata_is_complete(candidate):
             return None
         if self.confirm and not self.confirm(path, candidate):
             return None

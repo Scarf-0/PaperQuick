@@ -12,11 +12,13 @@ from paperquick.core import (
     citation_for,
     extract_dois,
     filename_for,
+    metadata_is_complete,
     metadata_from_crossref,
     normalize_title,
     sanitize_component,
     score_candidate,
     _candidate_titles,
+    _article_dois,
 )
 
 
@@ -28,6 +30,16 @@ def test_extract_dois_cleans_trailing_punctuation():
     assert extract_dois(text) == [
         "10.1152/jn.1998.80.3.1211",
         "10.1016/S1050-6411(02)00085-8",
+    ]
+
+
+def test_article_dois_prioritize_article_metadata_and_ignore_issn_doi():
+    metadata = {
+        "/WPS-JOURNALDOI": "10.1111/(ISSN)1600-0838",
+        "/WPS-ARTICLEDOI": "10.1111/sms.14149",
+    }
+    assert _article_dois(metadata, "DOI: 10.1111/sms.14149") == [
+        "10.1111/sms.14149"
     ]
 
 
@@ -116,6 +128,16 @@ def test_crossref_mapping_decodes_html():
     assert metadata.year == "1995"
 
 
+def test_incomplete_journal_record_is_not_usable_metadata():
+    journal = Metadata(
+        title="Scandinavian Journal of Medicine & Science in Sports",
+        authors=[],
+        year="",
+        doi="10.1111/(ISSN)1600-0838",
+    )
+    assert not metadata_is_complete(journal)
+
+
 def test_resolver_exact_doi_and_title_fallback():
     calls = []
 
@@ -139,6 +161,43 @@ def test_resolver_exact_doi_and_title_fallback():
     assert len(calls) == 1
 
 
+def test_resolver_skips_incomplete_journal_doi_for_article_doi():
+    def fetch(url):
+        if "%28ISSN%29" in url:
+            return {
+                "message": {
+                    "DOI": "10.1111/(ISSN)1600-0838",
+                    "title": ["Scandinavian Journal of Medicine & Science in Sports"],
+                }
+            }
+        return {
+            "message": {
+                "DOI": "10.1111/sms.14149",
+                "title": [
+                    "Efficiency of cycling exercise: Quantification, mechanisms, and misunderstandings"
+                ],
+                "author": [
+                    {"family": "MacDougall"},
+                    {"family": "Falconer"},
+                    {"family": "MacIntosh"},
+                ],
+                "published": {"date-parts": [[2022]]},
+            }
+        }
+
+    evidence = Evidence(
+        ["Efficiency of cycling exercise: Quantification, mechanisms, and misunderstandings"],
+        "",
+        {"2022"},
+        {"32"},
+        {"951"},
+        ["10.1111/(ISSN)1600-0838", "10.1111/sms.14149"],
+    )
+    result = Resolver(fetch).resolve(evidence)
+    assert result.doi == "10.1111/sms.14149"
+    assert result.authors == ["MacDougall", "Falconer", "MacIntosh"]
+
+
 def test_cache_round_trip(tmp_path):
     cache = Cache(tmp_path / "cache.json")
     metadata = Metadata("Paper", ["Author"], "2024", doi="10.1/test")
@@ -148,6 +207,31 @@ def test_cache_round_trip(tmp_path):
     assert (
         "Paper" in json.loads((tmp_path / "cache.json").read_text())["digest"]["title"]
     )
+
+
+def test_incomplete_cached_metadata_is_re_resolved(tmp_path, monkeypatch):
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"placeholder")
+    cache = Cache(tmp_path / "cache.json")
+    cache.put(
+        core.file_sha256(pdf),
+        Metadata("A Journal Name", [], "", doi="10.1/journal"),
+    )
+    evidence = Evidence(["A complete paper title"], "", {"2022"}, set(), set(), [])
+    monkeypatch.setattr(core, "read_pdf_evidence", lambda path: evidence)
+
+    class CompleteResolver:
+        def resolve(self, evidence, manual_query=""):
+            return Metadata(
+                "A complete paper title",
+                ["Author"],
+                "2022",
+                doi="10.1/article",
+                confidence=1.0,
+            )
+
+    service = PaperQuick(resolver=CompleteResolver(), cache=cache)
+    assert service.metadata_for(pdf).doi == "10.1/article"
 
 
 def test_exact_doi_is_accepted_even_without_title_evidence(tmp_path, monkeypatch):
