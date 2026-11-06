@@ -7,7 +7,9 @@ import logging
 import os
 import re
 import tempfile
+import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -23,6 +25,10 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+AUTO_CONFIDENCE = 0.90
+AUTO_TITLE_SIMILARITY = 0.93
+DOI_TITLE_SIMILARITY = 0.80
+CACHE_VERSION = 2
 GENERIC_TITLE_RE = re.compile(
     r"^(?:untitled|document|pdf|unknown year|unknown author|tbme\d*|pii\s*:|"
     r"doi\s*:|[a-z]{0,3}\.?\d[\w.%-]*)",
@@ -110,9 +116,17 @@ def _article_dois(metadata: dict, page_text: str) -> list[str]:
         for doi in extract_dois(clean_text(value)):
             if "(issn)" in doi.lower():
                 continue
+            if re.search(r"\.(?:fig|g|t|table)\d+$", doi, re.IGNORECASE):
+                continue
+            if doi.lower() == "10.1371/journal":
+                continue
             if doi.lower() not in {item.lower() for item in found}:
                 found.append(doi)
     return found
+
+
+def _front_matter_text(page_text: str) -> str:
+    return re.split(r"(?im)^\s*references\s*$", page_text, maxsplit=1)[0]
 
 
 def file_sha256(path: Path) -> str:
@@ -175,10 +189,13 @@ def read_pdf_evidence(path: Path) -> Evidence:
     reader = PdfReader(str(path))
     raw_metadata = dict(reader.metadata or {})
     page_text = "\n".join((page.extract_text() or "") for page in reader.pages[:2])
+    front_text = _front_matter_text(page_text)
     metadata_text = "\n".join(clean_text(value) for value in raw_metadata.values())
-    combined = f"{metadata_text}\n{page_text}"
-    titles = _candidate_titles(raw_metadata, path, page_text)
+    combined = f"{metadata_text}\n{front_text}"
+    titles = _candidate_titles(raw_metadata, path, front_text)
     years = set(YEAR_RE.findall(combined[:5000]))
+    filename_text = urllib.parse.unquote(path.stem).replace("_", " ")
+    years.update(YEAR_RE.findall(filename_text))
 
     volumes = set()
     pages = set()
@@ -191,11 +208,11 @@ def read_pdf_evidence(path: Path) -> Evidence:
 
     return Evidence(
         titles=titles,
-        text=page_text,
+        text=front_text,
         years=years,
         volumes=volumes,
         pages=pages,
-        dois=_article_dois(raw_metadata, page_text),
+        dois=_article_dois(raw_metadata, front_text),
     )
 
 
@@ -221,7 +238,10 @@ def metadata_from_crossref(item: dict, source: str = "Crossref") -> Metadata:
         title=title,
         authors=_family_names(item.get("author") or []),
         year=_first_date_year(
-            item.get("published-print") or item.get("published") or {}
+            item.get("published")
+            or item.get("published-online")
+            or item.get("published-print")
+            or {}
         ),
         journal=journal,
         short_journal=short_journal,
@@ -276,12 +296,25 @@ def title_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, normalize_title(left), normalize_title(right)).ratio()
 
 
-def score_candidate(candidate: Metadata, evidence: Evidence) -> float:
-    if not candidate.title or not evidence.titles:
-        return 0.0
-    title_score = max(
-        title_similarity(candidate.title, title) for title in evidence.titles
+def evidence_title_similarity(title: str, evidence: Evidence) -> float:
+    similarity = max(
+        (title_similarity(title, candidate) for candidate in evidence.titles),
+        default=0.0,
     )
+    normalized = normalize_title(title)
+    if (
+        len(normalized) >= 18
+        and len(normalized.split()) >= 4
+        and normalized in normalize_title(evidence.text)
+    ):
+        return 1.0
+    return similarity
+
+
+def score_candidate(candidate: Metadata, evidence: Evidence) -> float:
+    if not candidate.title:
+        return 0.0
+    title_score = evidence_title_similarity(candidate.title, evidence)
     score = title_score * 0.85
     if candidate.year and candidate.year in evidence.years:
         score += 0.06
@@ -301,8 +334,20 @@ def _default_fetch_json(url: str) -> dict:
             "User-Agent": "PaperQuick/0.1 (https://github.com/Scarf-0/PaperQuick)",
         },
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.load(response)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429 and not 500 <= exc.code < 600:
+                raise
+            if attempt == 2:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == 2:
+                raise
+        time.sleep(0.5 * (attempt + 1))
+    raise RuntimeError("Metadata request failed")
 
 
 class Resolver:
@@ -355,7 +400,12 @@ class Resolver:
         manual_dois = extract_dois(query)
         for doi in manual_dois or evidence.dois:
             result = self._crossref_doi(doi)
-            if result:
+            if result and (
+                manual_dois
+                or not (evidence.titles or clean_text(evidence.text))
+                or evidence_title_similarity(result.title, evidence)
+                >= DOI_TITLE_SIMILARITY
+            ):
                 return result
 
         titles = [query] if query and not manual_dois else evidence.titles
@@ -370,15 +420,16 @@ class Resolver:
             )
             if (
                 best
-                and best.confidence >= 0.84
-                and title_similarity(best.title, title) >= 0.93
+                and _is_useful_title(best.title)
+                and best.confidence >= AUTO_CONFIDENCE
+                and title_similarity(best.title, title) >= AUTO_TITLE_SIMILARITY
             ):
                 return best
 
         best = self._rank(
             candidates.values(), evidence, query if not manual_dois else ""
         )
-        if not best or best.confidence < 0.84:
+        if not best or best.confidence < AUTO_CONFIDENCE:
             for title in titles[:4]:
                 for candidate in self._openalex_title(title):
                     key = candidate.doi.lower() or normalize_title(candidate.title)
@@ -481,7 +532,9 @@ class Cache:
         )
         self.data: dict[str, dict] = {}
         try:
-            self.data = json.loads(self.path.read_text(encoding="utf-8"))
+            stored = json.loads(self.path.read_text(encoding="utf-8"))
+            if stored.get("version") == CACHE_VERSION:
+                self.data = stored.get("items", {})
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             self.data = {}
 
@@ -497,7 +550,12 @@ class Cache:
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(self.data, stream, ensure_ascii=False, indent=2)
+                json.dump(
+                    {"version": CACHE_VERSION, "items": self.data},
+                    stream,
+                    ensure_ascii=False,
+                    indent=2,
+                )
             os.replace(temp_name, self.path)
         finally:
             if os.path.exists(temp_name):
@@ -535,12 +593,16 @@ class PaperQuick:
             and metadata_is_complete(candidate)
             and (
                 doi_match
+                and (
+                    not (evidence.titles or clean_text(evidence.text))
+                    or evidence_title_similarity(candidate.title, evidence)
+                    >= DOI_TITLE_SIMILARITY
+                )
                 or (
-                    candidate.confidence >= 0.84
-                    and any(
-                        title_similarity(candidate.title, title) >= 0.93
-                        for title in evidence.titles
-                    )
+                    _is_useful_title(candidate.title)
+                    and candidate.confidence >= AUTO_CONFIDENCE
+                    and evidence_title_similarity(candidate.title, evidence)
+                    >= AUTO_TITLE_SIMILARITY
                 )
             )
         )
