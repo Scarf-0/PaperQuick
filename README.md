@@ -2,6 +2,10 @@
 
 Rename academic PDFs and copy slide-ready citations directly from Finder on macOS. No Zotero required.
 
+<p align="center">
+  <img src="assets/paperquick-workflow.png" alt="PaperQuick renames academic PDFs and copies slide-ready citations from Finder" width="100%">
+</p>
+
 ## Install
 
 Requires macOS and Python 3.9+.
