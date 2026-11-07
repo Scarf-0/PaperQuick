@@ -28,7 +28,7 @@ YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 AUTO_CONFIDENCE = 0.90
 AUTO_TITLE_SIMILARITY = 0.93
 DOI_TITLE_SIMILARITY = 0.80
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 GENERIC_TITLE_RE = re.compile(
     r"^(?:untitled|document|pdf|unknown year|unknown author|tbme\d*|pii\s*:|"
     r"doi\s*:|[a-z]{0,3}\.?\d[\w.%-]*)",
@@ -334,17 +334,17 @@ def _default_fetch_json(url: str) -> dict:
             "User-Agent": "PaperQuick/0.1 (https://github.com/Scarf-0/PaperQuick)",
         },
     )
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            with urllib.request.urlopen(request, timeout=20) as response:
+            with urllib.request.urlopen(request, timeout=8) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
             if exc.code != 429 and not 500 <= exc.code < 600:
                 raise
-            if attempt == 2:
+            if attempt == 1:
                 raise
         except (urllib.error.URLError, TimeoutError):
-            if attempt == 2:
+            if attempt == 1:
                 raise
         time.sleep(0.5 * (attempt + 1))
     raise RuntimeError("Metadata request failed")
@@ -410,30 +410,23 @@ class Resolver:
 
         titles = [query] if query and not manual_dois else evidence.titles
         candidates: dict[str, Metadata] = {}
-        for title in titles[:4]:
-            for candidate in self._crossref_title(title):
-                key = candidate.doi.lower() or normalize_title(candidate.title)
-                candidates[key] = candidate
-
-            best = self._rank(
-                candidates.values(), evidence, query if not manual_dois else ""
-            )
-            if (
-                best
-                and _is_useful_title(best.title)
-                and best.confidence >= AUTO_CONFIDENCE
-                and title_similarity(best.title, title) >= AUTO_TITLE_SIMILARITY
-            ):
-                return best
-
-        best = self._rank(
-            candidates.values(), evidence, query if not manual_dois else ""
-        )
-        if not best or best.confidence < AUTO_CONFIDENCE:
-            for title in titles[:4]:
-                for candidate in self._openalex_title(title):
+        for title in titles[:2]:
+            for search in (self._crossref_title, self._openalex_title):
+                for candidate in search(title):
                     key = candidate.doi.lower() or normalize_title(candidate.title)
                     candidates[key] = candidate
+
+                best = self._rank(
+                    candidates.values(), evidence, query if not manual_dois else ""
+                )
+                if (
+                    best
+                    and _is_useful_title(best.title)
+                    and best.confidence >= AUTO_CONFIDENCE
+                    and title_similarity(best.title, title)
+                    >= AUTO_TITLE_SIMILARITY
+                ):
+                    return best
 
         return self._rank(
             candidates.values(), evidence, query if not manual_dois else ""
@@ -540,10 +533,31 @@ class Cache:
 
     def get(self, digest: str) -> Optional[Metadata]:
         value = self.data.get(digest)
-        return Metadata.from_dict(value) if value else None
+        return (
+            Metadata.from_dict(value)
+            if value and value.get("status") != "review"
+            else None
+        )
+
+    def review(self, digest: str) -> tuple[bool, Optional[Metadata]]:
+        value = self.data.get(digest)
+        if not value or value.get("status") != "review":
+            return False, None
+        metadata = value.get("metadata")
+        return True, Metadata.from_dict(metadata) if metadata else None
 
     def put(self, digest: str, metadata: Metadata) -> None:
         self.data[digest] = asdict(metadata)
+        self._write()
+
+    def put_review(self, digest: str, metadata: Optional[Metadata]) -> None:
+        self.data[digest] = {
+            "status": "review",
+            "metadata": asdict(metadata) if metadata else None,
+        }
+        self._write()
+
+    def _write(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(
             prefix="cache-", suffix=".json", dir=self.path.parent
@@ -582,7 +596,9 @@ class PaperQuick:
             return cached
 
         evidence = read_pdf_evidence(path)
-        candidate = self.resolver.resolve(evidence)
+        review_cached, candidate = self.cache.review(digest)
+        if not review_cached:
+            candidate = self.resolver.resolve(evidence)
         doi_match = bool(
             candidate
             and candidate.doi
@@ -609,6 +625,9 @@ class PaperQuick:
         if accepted:
             self.cache.put(digest, candidate)
             return candidate
+
+        if not review_cached:
+            self.cache.put_review(digest, candidate)
 
         if not self.prompt:
             return None

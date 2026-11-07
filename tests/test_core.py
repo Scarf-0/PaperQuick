@@ -211,6 +211,31 @@ def test_resolver_exact_doi_and_title_fallback():
     assert len(calls) == 1
 
 
+def test_title_lookup_is_limited_to_two_titles_and_two_sources():
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        if "api.crossref.org" in url:
+            return {"message": {"items": []}}
+        return {"results": []}
+
+    evidence = Evidence(
+        [
+            "First plausible paper title",
+            "Second plausible paper title",
+            "Third plausible paper title",
+        ],
+        "",
+        set(),
+        set(),
+        set(),
+        [],
+    )
+    assert Resolver(fetch).resolve(evidence) is None
+    assert len(calls) == 4
+
+
 def test_resolver_skips_incomplete_journal_doi_for_article_doi():
     def fetch(url):
         if "%28ISSN%29" in url:
@@ -260,6 +285,16 @@ def test_cache_round_trip(tmp_path):
             "title"
         ]
     )
+
+
+def test_review_result_is_cached_without_becoming_accepted(tmp_path):
+    cache = Cache(tmp_path / "cache.json")
+    candidate = Metadata("Possible Paper", ["Author"], "2024", confidence=0.5)
+    cache.put_review("digest", candidate)
+
+    loaded = Cache(tmp_path / "cache.json")
+    assert loaded.get("digest") is None
+    assert loaded.review("digest") == (True, candidate)
 
 
 def test_legacy_cache_is_invalidated(tmp_path):
@@ -379,6 +414,27 @@ def test_exact_doi_with_conflicting_title_is_not_accepted(tmp_path, monkeypatch)
 
     service = PaperQuick(resolver=WrongResolver(), cache=Cache(tmp_path / "cache.json"))
     assert service.metadata_for(pdf) is None
+
+
+def test_review_cache_skips_repeated_network_resolution(tmp_path, monkeypatch):
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"placeholder")
+    evidence = Evidence(["Actual Paper Title"], "", {"2024"}, set(), set(), [])
+    monkeypatch.setattr(core, "read_pdf_evidence", lambda path: evidence)
+
+    class CountingResolver:
+        def __init__(self):
+            self.calls = 0
+
+        def resolve(self, evidence, manual_query=""):
+            self.calls += 1
+            return Metadata("Unrelated Result", ["Other"], "2010", confidence=0.4)
+
+    resolver = CountingResolver()
+    service = PaperQuick(resolver=resolver, cache=Cache(tmp_path / "cache.json"))
+    assert service.metadata_for(pdf) is None
+    assert service.metadata_for(pdf) is None
+    assert resolver.calls == 1
 
 
 def test_duplicate_selected_files_are_kept(tmp_path, monkeypatch):
